@@ -495,7 +495,7 @@ namespace PalmRejectorPro
             {
                 Pen? pen = lastWasRejected ? rejectedPen : validPen;
                 if (pen != null)
-                    g.DrawRectangle(pen, lastContactRect);
+                    g.DrawEllipse(pen, lastContactRect);
             }
         }
 
@@ -508,10 +508,10 @@ namespace PalmRejectorPro
                     continue;
 
                 if (palmBrush != null)
-                    g.FillRectangle(palmBrush, blob.InnerMask);
+                    g.FillEllipse(palmBrush, blob.InnerMask);
 
                 if (outerRingPen != null)
-                    g.DrawRectangle(outerRingPen, blob.OuterRing);
+                    g.DrawEllipse(outerRingPen, blob.OuterRing);
             }
         }
 

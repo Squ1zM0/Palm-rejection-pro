@@ -10,7 +10,7 @@
         "projectUniqueName": "/tmp/workspace/Squ1zM0/Palm-rejection-pro/PalmRejectorPro.csproj",
         "projectName": "PalmRejectorPro",
         "projectPath": "/tmp/workspace/Squ1zM0/Palm-rejection-pro/PalmRejectorPro.csproj",
-        "packagesPath": "/tmp/codeql-scratch-02f17bc7331a0538/dbs/csharp/working/packages",
+        "packagesPath": "/home/runner/.nuget/packages/",
         "outputPath": "/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/",
         "projectStyle": "PackageReference",
         "configFilePaths": [
@@ -57,18 +57,6 @@
           "assetTargetFallback": true,
           "warn": true,
           "downloadDependencies": [
-            {
-              "name": "Microsoft.AspNetCore.App.Ref",
-              "version": "[8.0.27, 8.0.27]"
-            },
-            {
-              "name": "Microsoft.NETCore.App.Host.linux-x64",
-              "version": "[8.0.27, 8.0.27]"
-            },
-            {
-              "name": "Microsoft.NETCore.App.Ref",
-              "version": "[8.0.27, 8.0.27]"
-            },
             {
               "name": "Microsoft.WindowsDesktop.App.Ref",
               "version": "[8.0.27, 8.0.27]"

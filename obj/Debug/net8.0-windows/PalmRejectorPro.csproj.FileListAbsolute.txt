@@ -1,0 +1,15 @@
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/bin/Debug/net8.0-windows/PalmRejectorPro
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/bin/Debug/net8.0-windows/PalmRejectorPro.deps.json
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/bin/Debug/net8.0-windows/PalmRejectorPro.runtimeconfig.json
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/bin/Debug/net8.0-windows/PalmRejectorPro.dll
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/bin/Debug/net8.0-windows/PalmRejectorPro.pdb
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.GeneratedMSBuildEditorConfig.editorconfig
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.AssemblyInfoInputs.cache
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.AssemblyInfo.cs
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.csproj.CoreCompileInputs.cache
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.sourcelink.json
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.dll
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/refint/PalmRejectorPro.dll
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.pdb
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/PalmRejectorPro.genruntimeconfig.cache
+/tmp/workspace/Squ1zM0/Palm-rejection-pro/obj/Debug/net8.0-windows/ref/PalmRejectorPro.dll
