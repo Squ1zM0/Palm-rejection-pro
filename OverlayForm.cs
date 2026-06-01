@@ -177,7 +177,7 @@ namespace PalmRejectorPro
 
         private void UnregisterForTouchInput()
         {
-            if (!isTouchRegistered || touchRegistrationHandle == IntPtr.Zero)
+            if (!isTouchRegistered)
                 return;
 
             if (!UnregisterPointerInputTarget(touchRegistrationHandle, PT_TOUCH))
@@ -739,7 +739,7 @@ namespace PalmRejectorPro
                 6 => "INVALID_HANDLE",
                 50 => "NOT_SUPPORTED",
                 87 => "INVALID_PARAMETER",
-                1150 => "OLD_WIN_VERSION",
+                1150 => "VERSION_TOO_OLD",
                 1168 => "NOT_FOUND",
                 _ => "WIN32_ERROR"
             };
