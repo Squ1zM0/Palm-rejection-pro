@@ -675,18 +675,6 @@ namespace PalmRejectorPro
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool UnregisterPointerInputTarget(IntPtr hwnd, uint pointerType);
 
-        private struct ClusterInfo
-        {
-            public Rectangle BoundingBox { get; set; }
-            public int Area => IsEmpty ? 0 : BoundingBox.Width * BoundingBox.Height;
-            public bool IsEmpty => BoundingBox.Width <= 0 || BoundingBox.Height <= 0;
-
-            public bool Contains(Rectangle r)
-            {
-                return !IsEmpty && BoundingBox.IntersectsWith(r);
-            }
-        }
-
         private struct TouchBlobResult
         {
             public bool IsRejected;
