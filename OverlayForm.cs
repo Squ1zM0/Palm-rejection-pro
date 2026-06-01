@@ -4,6 +4,8 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.ComponentModel;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -22,7 +24,6 @@ namespace PalmRejectorPro
         private const uint PT_TOUCH = 0x00000002;
 
         private const int WS_EX_LAYERED = 0x00080000;
-        private const int WS_EX_NOACTIVATE = 0x08000000;
         private const int WS_EX_TOOLWINDOW = 0x00000080;
 
         private Settings settings = new Settings();
@@ -56,6 +57,9 @@ namespace PalmRejectorPro
         private bool lastWasRejected = false;
 
         private string lastDetail = "READY";
+        private bool isTouchRegistered;
+        private bool hasSeenPointerMessageSinceRegistration;
+        private IntPtr touchRegistrationHandle = IntPtr.Zero;
 
         public OverlayForm()
         {
@@ -87,7 +91,7 @@ namespace PalmRejectorPro
             get
             {
                 var cp = base.CreateParams;
-                cp.ExStyle |= WS_EX_LAYERED | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW;
+                cp.ExStyle |= WS_EX_LAYERED | WS_EX_TOOLWINDOW;
                 return cp;
             }
         }
@@ -95,7 +99,6 @@ namespace PalmRejectorPro
         private void OverlayForm_Shown(object? sender, EventArgs e)
         {
             ApplyOverlayOpacity();
-            RegisterForTouchInput();
             blobDecayTimer.Start();
             EnsureScouter();
             UpdateScouter();
@@ -150,11 +153,42 @@ namespace PalmRejectorPro
             if (!IsHandleCreated)
                 return;
 
+            if (isTouchRegistered && touchRegistrationHandle == Handle)
+                return;
+
             bool ok = RegisterPointerInputTarget(Handle, PT_TOUCH);
             if (!ok)
             {
-                UpdateScouterStatus($"TOUCH REG FAIL ({Marshal.GetLastWin32Error()})");
+                int error = Marshal.GetLastWin32Error();
+                isTouchRegistered = false;
+                touchRegistrationHandle = IntPtr.Zero;
+                hasSeenPointerMessageSinceRegistration = false;
+                LogTouchDiagnostic($"Touch registration failed: {FormatWin32Error(error, includeMessage: true)}");
+                UpdateScouterStatus($"TOUCH REG FAIL {FormatWin32Error(error)}");
+                return;
             }
+
+            isTouchRegistered = true;
+            touchRegistrationHandle = Handle;
+            hasSeenPointerMessageSinceRegistration = false;
+            LogTouchDiagnostic($"Touch registration active on HWND 0x{Handle.ToInt64():X}.");
+            UpdateScouterStatus("TOUCH REG OK (WAIT INPUT)");
+        }
+
+        private void UnregisterForTouchInput()
+        {
+            if (!isTouchRegistered)
+                return;
+
+            if (!UnregisterPointerInputTarget(touchRegistrationHandle, PT_TOUCH))
+            {
+                int error = Marshal.GetLastWin32Error();
+                LogTouchDiagnostic($"Touch unregister failed: {FormatWin32Error(error, includeMessage: true)}");
+            }
+
+            isTouchRegistered = false;
+            touchRegistrationHandle = IntPtr.Zero;
+            hasSeenPointerMessageSinceRegistration = false;
         }
 
         public void IncreaseThreshold()
@@ -234,6 +268,15 @@ namespace PalmRejectorPro
             if (settings.Enabled &&
                 (m.Msg == WM_POINTERDOWN || m.Msg == WM_POINTERUPDATE || m.Msg == WM_POINTERUP))
             {
+                if (!hasSeenPointerMessageSinceRegistration)
+                {
+                    hasSeenPointerMessageSinceRegistration = true;
+                    if (isTouchRegistered)
+                        LogTouchDiagnostic("Pointer messages detected after touch registration.");
+                    else
+                        LogTouchDiagnostic("Pointer messages detected while touch registration is inactive.");
+                }
+
                 uint pointerId = GET_POINTERID_WPARAM(m.WParam);
 
                 if (GetPointerType(pointerId, out uint pointerType) && pointerType == PT_TOUCH)
@@ -273,7 +316,9 @@ namespace PalmRejectorPro
                     }
                     else
                     {
-                        UpdateScouterStatus($"TOUCH INFO FAIL ({Marshal.GetLastWin32Error()})");
+                        int error = Marshal.GetLastWin32Error();
+                        LogTouchDiagnostic($"GetPointerTouchInfo failed: {FormatWin32Error(error, includeMessage: true)} (PointerId {pointerId})");
+                        UpdateScouterStatus($"TOUCH INFO FAIL {FormatWin32Error(error)}");
                     }
                 }
             }
@@ -622,8 +667,7 @@ namespace PalmRejectorPro
         {
             base.OnFormClosing(e);
 
-            if (IsHandleCreated)
-                UnregisterPointerInputTarget(Handle, PT_TOUCH);
+            UnregisterForTouchInput();
 
             if (scouterForm != null && !scouterForm.IsDisposed)
             {
@@ -640,6 +684,18 @@ namespace PalmRejectorPro
             outerRingPen?.Dispose();
             validPen?.Dispose();
             rejectedPen?.Dispose();
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            RegisterForTouchInput();
+        }
+
+        protected override void OnHandleDestroyed(EventArgs e)
+        {
+            UnregisterForTouchInput();
+            base.OnHandleDestroyed(e);
         }
 
         private static uint GET_POINTERID_WPARAM(IntPtr wParam)
@@ -674,6 +730,31 @@ namespace PalmRejectorPro
 
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool UnregisterPointerInputTarget(IntPtr hwnd, uint pointerType);
+
+        private static string FormatWin32Error(int error, bool includeMessage = false)
+        {
+            string name = error switch
+            {
+                5 => "ACCESS_DENIED",
+                6 => "INVALID_HANDLE",
+                50 => "NOT_SUPPORTED",
+                87 => "INVALID_PARAMETER",
+                1150 => "VERSION_TOO_OLD",
+                1168 => "NOT_FOUND",
+                _ => "WIN32_ERROR"
+            };
+
+            if (!includeMessage)
+                return $"{name}({error})";
+
+            string message = new Win32Exception(error).Message;
+            return $"{name}({error}): {message}";
+        }
+
+        private static void LogTouchDiagnostic(string message)
+        {
+            Debug.WriteLine($"[PalmRejectorPro.Touch] {message}");
+        }
 
         private struct TouchBlobResult
         {

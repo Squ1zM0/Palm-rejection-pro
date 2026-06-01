@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("PalmRejectorPro")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+349c392b416c5e995b99034eccf58014900a72ad")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+2dd9ffe1a070dd4e6bc4b9f835972e805061950f")]
 [assembly: System.Reflection.AssemblyProductAttribute("PalmRejectorPro")]
 [assembly: System.Reflection.AssemblyTitleAttribute("PalmRejectorPro")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
