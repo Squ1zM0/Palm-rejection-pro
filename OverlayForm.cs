@@ -17,7 +17,6 @@ namespace PalmRejectorPro
         private const int WM_POINTERDOWN = 0x0246;
         private const int WM_POINTERUP = 0x0247;
         private const int WM_NCHITTEST = 0x0084;
-        private const int HTTRANSPARENT = -1;
         private const int HTCLIENT = 1;
 
         private const uint PT_TOUCH = 0x00000002;
@@ -39,22 +38,20 @@ namespace PalmRejectorPro
         private ContextMenuStrip? trayMenu;
         private ScouterForm? scouterForm;
 
-        private readonly List<TimestampedTouch> recentContacts = new List<TimestampedTouch>();
-        private readonly TimeSpan contactHistoryWindow = TimeSpan.FromMilliseconds(300);
+        private readonly List<PalmBlob> palmBlobs = new List<PalmBlob>();
+        private readonly System.Windows.Forms.Timer blobDecayTimer;
+        private readonly List<Rectangle> onboardingSamples = new List<Rectangle>();
+        private bool onboardingActive;
 
-        private readonly Color kiBlue = Color.FromArgb(140, 0, 170, 255);
         private readonly Color kiOrange = Color.FromArgb(150, 255, 120, 0);
         private readonly Color kiGold = Color.FromArgb(220, 255, 215, 0);
         private readonly Color kiRed = Color.FromArgb(210, 255, 70, 40);
 
-        private Brush? fingertipBrush;
         private Brush? palmBrush;
-        private Pen? clusterPen;
+        private Pen? outerRingPen;
         private Pen? validPen;
         private Pen? rejectedPen;
 
-        private ClusterInfo lastLeftCluster = new ClusterInfo { BoundingBox = Rectangle.Empty };
-        private ClusterInfo lastRightCluster = new ClusterInfo { BoundingBox = Rectangle.Empty };
         private Rectangle lastContactRect = Rectangle.Empty;
         private bool lastWasRejected = false;
 
@@ -64,6 +61,9 @@ namespace PalmRejectorPro
         {
             LoadSettings();
             InitBrushes();
+            blobDecayTimer = new System.Windows.Forms.Timer();
+            blobDecayTimer.Tick += BlobDecayTimer_Tick;
+            ConfigureBlobTimer();
 
             FormBorderStyle = FormBorderStyle.None;
             WindowState = FormWindowState.Maximized;
@@ -96,8 +96,10 @@ namespace PalmRejectorPro
         {
             ApplyOverlayOpacity();
             RegisterForTouchInput();
+            blobDecayTimer.Start();
             EnsureScouter();
             UpdateScouter();
+            BeginOnboardingIfNeeded();
         }
 
         private void OverlayForm_Resize(object? sender, EventArgs e)
@@ -131,9 +133,8 @@ namespace PalmRejectorPro
 
         private void InitBrushes()
         {
-            fingertipBrush = new SolidBrush(kiBlue);
             palmBrush = new SolidBrush(kiOrange);
-            clusterPen = new Pen(kiGold, 2f);
+            outerRingPen = new Pen(kiGold, 2f) { DashStyle = DashStyle.Dash };
             validPen = new Pen(Color.Cyan, 3f);
             rejectedPen = new Pen(kiRed, 3f);
         }
@@ -226,7 +227,7 @@ namespace PalmRejectorPro
                     return;
                 }
 
-                m.Result = (IntPtr)HTTRANSPARENT;
+                m.Result = (IntPtr)HTCLIENT;
                 return;
             }
 
@@ -241,35 +242,30 @@ namespace PalmRejectorPro
                     {
                         RECT rc = (ti.touchMask & TOUCH_MASK.CONTACTAREA) != 0
                             ? ti.rcContact
-                            : PointToRect(ti.pointerInfo.ptPixelLocation, 5, 5);
+                            : PointToRect(ti.pointerInfo.ptPixelLocation, 15, 15);
 
                         Rectangle contact = RectFromRECT(rc);
+                        int historyCount = (int)ti.pointerInfo.historyCount;
 
-                        AddRecentContact(contact, ti);
+                        if (onboardingActive)
+                        {
+                            CaptureOnboardingSample(contact);
+                        }
 
-                        var (left, right) = ComputeLeftRightClusters();
-                        bool fingertipIsLeft = left.Area <= right.Area;
-                        ClusterInfo fingertipCluster = fingertipIsLeft ? left : right;
-                        ClusterInfo palmCluster = fingertipIsLeft ? right : left;
-
-                        bool inPalm = palmCluster.Contains(contact);
-                        bool rejected = IsRejected(contact, inPalm, palmCluster, fingertipCluster, ti);
-
-                        lastLeftCluster = left;
-                        lastRightCluster = right;
+                        TouchBlobResult result = UpdateBlobs(contact, ti, historyCount);
                         lastContactRect = contact;
-                        lastWasRejected = rejected;
+                        lastWasRejected = result.IsRejected;
 
                         string detail =
                             $"POS {contact.X},{contact.Y}\n" +
                             $"SIZE {contact.Width}x{contact.Height}\n" +
-                            $"L {left.Area}  R {right.Area}\n" +
-                            $"MODE {(rejected ? "PALM/ARM BLOCK" : "VALID TOUCH")}";
+                            $"BLOBS {result.LiveBlobCount}\n" +
+                            $"MODE {(result.IsRejected ? "PALM/ARM BLOCK" : "VALID TOUCH")}";
 
                         UpdateScouter(detail);
                         Invalidate();
 
-                        if (rejected)
+                        if (result.IsRejected)
                         {
                             m.Result = IntPtr.Zero;
                             return;
@@ -294,134 +290,193 @@ namespace PalmRejectorPro
             return scouterForm.Bounds.Contains(cursor);
         }
 
-        private bool IsRejected(
-            Rectangle contact,
-            bool inPalmCluster,
-            ClusterInfo palmCluster,
-            ClusterInfo fingertipCluster,
-            POINTER_TOUCH_INFO ti)
+        private TouchBlobResult UpdateBlobs(Rectangle contact, POINTER_TOUCH_INFO ti, int historyCount)
         {
-            int w = Math.Max(1, contact.Width);
-            int h = Math.Max(1, contact.Height);
-            int longSide = Math.Max(w, h);
-            int shortSide = Math.Min(w, h);
-            int area = w * h;
-            int threshold = settings.PalmThreshold;
+            Rectangle padded = Expand(contact, settings.PalmPadding);
 
-            if (w >= threshold || h >= threshold)
+            PalmBlob? targetBlob = null;
+            List<PalmBlob> overlapping = new List<PalmBlob>();
+            for (int i = 0; i < palmBlobs.Count; i++)
+            {
+                PalmBlob blob = palmBlobs[i];
+                if (!blob.IsAlive)
+                    continue;
+
+                if (blob.OuterRing.IntersectsWith(contact))
+                    overlapping.Add(blob);
+            }
+
+            if (overlapping.Count > 0)
+            {
+                targetBlob = overlapping[0];
+                for (int i = 1; i < overlapping.Count; i++)
+                {
+                    PalmBlob extra = overlapping[i];
+                    targetBlob.InnerMask = Rectangle.Union(targetBlob.InnerMask, extra.InnerMask);
+                    palmBlobs.Remove(extra);
+                }
+
+                targetBlob.InnerMask = Rectangle.Union(targetBlob.InnerMask, padded);
+                targetBlob.OuterRing = Expand(targetBlob.InnerMask, settings.OuterRingSize);
+                targetBlob.LastSeen = DateTime.UtcNow;
+                targetBlob.Confidence = 1f;
+            }
+            else if (IsLargeContact(contact, ti, historyCount))
+            {
+                PalmBlob seeded = new PalmBlob
+                {
+                    InnerMask = padded,
+                    OuterRing = Expand(padded, settings.OuterRingSize),
+                    LastSeen = DateTime.UtcNow,
+                    Confidence = 1f
+                };
+                palmBlobs.Add(seeded);
+            }
+
+            bool rejected = palmBlobs.Any(blob => blob.IsAlive && blob.InnerMask.IntersectsWith(contact));
+            int liveCount = palmBlobs.Count(blob => blob.IsAlive);
+            return new TouchBlobResult
+            {
+                IsRejected = rejected,
+                LiveBlobCount = liveCount
+            };
+        }
+
+        private bool IsLargeContact(Rectangle contact, POINTER_TOUCH_INFO ti, int historyCount)
+        {
+            int width = Math.Max(1, contact.Width);
+            int height = Math.Max(1, contact.Height);
+            int longSide = Math.Max(width, height);
+            int shortSide = Math.Min(width, height);
+            int area = width * height;
+
+            if (width >= settings.PalmThreshold || height >= settings.PalmThreshold)
                 return true;
 
             if (area >= settings.AbsoluteAreaThreshold)
-                return true;
-
-            float aspect = (float)longSide / shortSide;
-            if (aspect >= settings.ArmAspectRatioThreshold && shortSide >= settings.ArmMinShortSide)
-                return true;
-
-            if (inPalmCluster && palmCluster.Area >= settings.ClusterAreaThreshold)
-                return true;
-
-            if (fingertipCluster.Area > 0 &&
-                palmCluster.Area >= fingertipCluster.Area * settings.PalmToFingerAreaRatio &&
-                palmCluster.Contains(contact))
                 return true;
 
             if ((ti.touchMask & TOUCH_MASK.PRESSURE) != 0 &&
                 ti.pressure >= settings.PressureThreshold)
                 return true;
 
-            if ((ti.touchMask & TOUCH_MASK.ORIENTATION) != 0)
+            if ((ti.touchMask & TOUCH_MASK.ORIENTATION) != 0 &&
+                (ti.orientation <= settings.OrientationLowReject ||
+                 ti.orientation >= settings.OrientationHighReject) &&
+                longSide >= settings.OrientationSizeGate)
+                return true;
+
+            if (shortSide > 0)
             {
-                if ((ti.orientation <= settings.OrientationLowReject ||
-                     ti.orientation >= settings.OrientationHighReject) &&
-                    longSide >= settings.OrientationSizeGate)
-                {
+                float aspect = (float)longSide / shortSide;
+                if (aspect >= settings.ArmAspectRatioThreshold &&
+                    shortSide >= settings.ArmMinShortSide)
                     return true;
-                }
             }
+
+            if (historyCount >= 2 && area >= settings.AbsoluteAreaThreshold / 2)
+                return true;
 
             return false;
         }
 
-        private void AddRecentContact(Rectangle rect, POINTER_TOUCH_INFO ti)
+        private void BlobDecayTimer_Tick(object? sender, EventArgs e)
         {
-            lock (recentContacts)
+            bool changed = false;
+            for (int i = palmBlobs.Count - 1; i >= 0; i--)
             {
-                recentContacts.Add(new TimestampedTouch
+                PalmBlob blob = palmBlobs[i];
+                if ((DateTime.UtcNow - blob.LastSeen).TotalMilliseconds >= blobDecayTimer.Interval)
                 {
-                    Rect = rect,
-                    Info = ti,
-                    Time = DateTime.UtcNow
-                });
+                    blob.Confidence -= settings.BlobDecayRate;
+                    changed = true;
+                }
 
-                DateTime cutoff = DateTime.UtcNow - contactHistoryWindow;
-                recentContacts.RemoveAll(x => x.Time < cutoff);
+                if (!blob.IsAlive)
+                {
+                    palmBlobs.RemoveAt(i);
+                    changed = true;
+                }
+                else
+                {
+                    palmBlobs[i] = blob;
+                }
+            }
+
+            if (changed)
+                Invalidate();
+        }
+
+        private void ConfigureBlobTimer()
+        {
+            blobDecayTimer.Interval = Math.Max(50, settings.BlobDecayIntervalMs);
+        }
+
+        private static Rectangle Expand(Rectangle rect, int margin)
+        {
+            if (rect.IsEmpty)
+                return rect;
+
+            return Rectangle.FromLTRB(
+                rect.Left - margin,
+                rect.Top - margin,
+                rect.Right + margin,
+                rect.Bottom + margin);
+        }
+
+        private void BeginOnboardingIfNeeded()
+        {
+            if (settings.OnboardingCompleted)
+                return;
+
+            onboardingActive = true;
+            onboardingSamples.Clear();
+            MessageBox.Show(
+                "Palm calibration: place your palm on the touchscreen for a moment to capture baseline size.",
+                "Palm Rejector Pro Calibration",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information);
+        }
+
+        public void StartCalibration()
+        {
+            settings.OnboardingCompleted = false;
+            SaveSettings();
+            BeginOnboardingIfNeeded();
+            UpdateScouterStatus("CALIBRATING");
+        }
+
+        private void CaptureOnboardingSample(Rectangle contact)
+        {
+            int area = Math.Max(1, contact.Width) * Math.Max(1, contact.Height);
+            if (area < 200)
+                return;
+
+            onboardingSamples.Add(contact);
+            UpdateScouterStatus($"CALIBRATING {onboardingSamples.Count}/12");
+            if (onboardingSamples.Count >= 12)
+            {
+                CompleteOnboarding();
             }
         }
 
-        private (ClusterInfo left, ClusterInfo right) ComputeLeftRightClusters()
+        private void CompleteOnboarding()
         {
-            List<Rectangle> rects;
-            lock (recentContacts)
-            {
-                rects = recentContacts.Select(x => x.Rect).ToList();
-            }
+            onboardingActive = false;
+            if (onboardingSamples.Count == 0)
+                return;
 
-            if (rects.Count == 0)
-                return (EmptyCluster(), EmptyCluster());
+            List<int> widths = onboardingSamples.Select(r => Math.Max(r.Width, r.Height)).OrderBy(v => v).ToList();
+            List<int> areas = onboardingSamples.Select(r => Math.Max(1, r.Width) * Math.Max(1, r.Height)).OrderBy(v => v).ToList();
 
-            var centers = rects
-                .Select(r => r.Left + (r.Width / 2))
-                .OrderBy(x => x)
-                .ToList();
+            int widthP75 = widths[(int)(widths.Count * 0.75)];
+            int areaP75 = areas[(int)(areas.Count * 0.75)];
 
-            int medianX = centers[centers.Count / 2];
-
-            List<Rectangle> leftRects = rects
-                .Where(r => (r.Left + r.Width / 2) <= medianX)
-                .ToList();
-
-            List<Rectangle> rightRects = rects
-                .Where(r => (r.Left + r.Width / 2) > medianX)
-                .ToList();
-
-            ClusterInfo left = MakeCluster(leftRects);
-            ClusterInfo right = MakeCluster(rightRects);
-
-            if (left.IsEmpty && rightRects.Count > 0)
-            {
-                Rectangle candidate = rightRects.OrderBy(r => r.Left).First();
-                left = MakeCluster(new List<Rectangle> { candidate });
-                right = MakeCluster(rightRects.Where(r => r != candidate).ToList());
-            }
-            else if (right.IsEmpty && leftRects.Count > 0)
-            {
-                Rectangle candidate = leftRects.OrderByDescending(r => r.Right).First();
-                right = MakeCluster(new List<Rectangle> { candidate });
-                left = MakeCluster(leftRects.Where(r => r != candidate).ToList());
-            }
-
-            return (left, right);
-        }
-
-        private static ClusterInfo MakeCluster(List<Rectangle> rects)
-        {
-            if (rects == null || rects.Count == 0)
-                return EmptyCluster();
-
-            return new ClusterInfo
-            {
-                BoundingBox = Rectangle.FromLTRB(
-                    rects.Min(r => r.Left),
-                    rects.Min(r => r.Top),
-                    rects.Max(r => r.Right),
-                    rects.Max(r => r.Bottom))
-            };
-        }
-
-        private static ClusterInfo EmptyCluster()
-        {
-            return new ClusterInfo { BoundingBox = Rectangle.Empty };
+            settings.PalmThreshold = Math.Max(20, (int)Math.Round(widthP75 * 0.7));
+            settings.AbsoluteAreaThreshold = Math.Max(700, (int)Math.Round(areaP75 * 0.55));
+            settings.OnboardingCompleted = true;
+            SaveSettings();
+            UpdateScouterStatus("CALIBRATION COMPLETE");
         }
 
         protected override void OnPaint(PaintEventArgs e)
@@ -434,30 +489,30 @@ namespace PalmRejectorPro
             Graphics g = e.Graphics;
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
-            bool leftIsPalm = lastLeftCluster.Area >= lastRightCluster.Area;
-
-            DrawCluster(g, lastLeftCluster, leftIsPalm);
-            DrawCluster(g, lastRightCluster, !leftIsPalm);
+            DrawBlobs(g);
 
             if (!lastContactRect.IsEmpty)
             {
                 Pen? pen = lastWasRejected ? rejectedPen : validPen;
                 if (pen != null)
-                    g.DrawRectangle(pen, lastContactRect);
+                    g.DrawEllipse(pen, lastContactRect);
             }
         }
 
-        private void DrawCluster(Graphics g, ClusterInfo cluster, bool isPalm)
+        private void DrawBlobs(Graphics g)
         {
-            if (cluster.IsEmpty)
-                return;
+            for (int i = 0; i < palmBlobs.Count; i++)
+            {
+                PalmBlob blob = palmBlobs[i];
+                if (!blob.IsAlive)
+                    continue;
 
-            Brush? brush = isPalm ? palmBrush : fingertipBrush;
-            if (brush != null)
-                g.FillRectangle(brush, cluster.BoundingBox);
+                if (palmBrush != null)
+                    g.FillEllipse(palmBrush, blob.InnerMask);
 
-            if (clusterPen != null)
-                g.DrawRectangle(clusterPen, cluster.BoundingBox);
+                if (outerRingPen != null)
+                    g.DrawEllipse(outerRingPen, blob.OuterRing);
+            }
         }
 
         private void CreateTray()
@@ -469,6 +524,7 @@ namespace PalmRejectorPro
             trayMenu.Items.Add("Threshold -5", null, (s, e) => DecreaseThreshold());
             trayMenu.Items.Add("Opacity +0.05", null, (s, e) => IncreaseOpacity());
             trayMenu.Items.Add("Opacity -0.05", null, (s, e) => DecreaseOpacity());
+            trayMenu.Items.Add("Recalibrate", null, (s, e) => StartCalibration());
             trayMenu.Items.Add("Start With Windows", null, (s, e) => ToggleStartup());
             trayMenu.Items.Add("Exit", null, (s, e) => ExitApp());
 
@@ -576,11 +632,12 @@ namespace PalmRejectorPro
                 scouterForm = null;
             }
 
+            blobDecayTimer.Stop();
+            blobDecayTimer.Dispose();
             trayIcon?.Dispose();
             trayMenu?.Dispose();
-            fingertipBrush?.Dispose();
             palmBrush?.Dispose();
-            clusterPen?.Dispose();
+            outerRingPen?.Dispose();
             validPen?.Dispose();
             rejectedPen?.Dispose();
         }
@@ -618,23 +675,19 @@ namespace PalmRejectorPro
         [DllImport("user32.dll", SetLastError = true)]
         private static extern bool UnregisterPointerInputTarget(IntPtr hwnd, uint pointerType);
 
-        private struct TimestampedTouch
+        private struct TouchBlobResult
         {
-            public Rectangle Rect;
-            public POINTER_TOUCH_INFO Info;
-            public DateTime Time;
+            public bool IsRejected;
+            public int LiveBlobCount;
         }
 
-        private struct ClusterInfo
+        private class PalmBlob
         {
-            public Rectangle BoundingBox;
-            public int Area => Math.Max(1, BoundingBox.Width * BoundingBox.Height);
-            public bool IsEmpty => BoundingBox.Width <= 0 || BoundingBox.Height <= 0;
-
-            public bool Contains(Rectangle r)
-            {
-                return !IsEmpty && BoundingBox.IntersectsWith(r);
-            }
+            public Rectangle InnerMask { get; set; }
+            public Rectangle OuterRing { get; set; }
+            public DateTime LastSeen { get; set; }
+            public float Confidence { get; set; }
+            public bool IsAlive => Confidence > 0.05f;
         }
 
         [StructLayout(LayoutKind.Sequential)]
@@ -704,7 +757,12 @@ namespace PalmRejectorPro
         {
             public int PalmThreshold { get; set; } = 45;
             public int AbsoluteAreaThreshold { get; set; } = 1500;
+            public int PalmPadding { get; set; } = 40;
+            public int OuterRingSize { get; set; } = 60;
+            public float BlobDecayRate { get; set; } = 0.08f;
+            public int BlobDecayIntervalMs { get; set; } = 150;
             public bool Enabled { get; set; } = true;
+            public bool OnboardingCompleted { get; set; } = false;
             public double OverlayOpacity { get; set; } = 0.85;
             public uint PressureThreshold { get; set; } = 800;
             public float ArmAspectRatioThreshold { get; set; } = 3.0f;

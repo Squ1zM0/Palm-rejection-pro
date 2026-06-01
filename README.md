@@ -32,6 +32,7 @@ Recommended:
 Right-click tray icon:
 - Enable Overlay
 - Disable Overlay
+- Recalibrate
 - Start With Windows
 - Exit
 
@@ -66,20 +67,27 @@ It works best on touchscreens that expose:
 
 through the Windows Pointer API.
 
-## Persistent Blob Architecture Update
+## Persistent Blob Architecture
 
-This build now implements:
+Palm rejection now uses persistent `PalmBlob` tracking:
 
-- persistent support-contact territory tracking
-- inner and outer adaptive masks
-- blob reacquisition logic
-- slow confidence decay
-- multi-contact absorption
-- exterior touch-safe interaction zones
-- drawing-oriented support-contact persistence
+- large contact seeds a blob (`InnerMask`)
+- each blob also owns an expanded sensing zone (`OuterRing`)
+- touches inside `OuterRing` merge/expand the blob
+- touches inside `InnerMask` are rejected
+- live blobs decay over time and are removed automatically
 
-The system is optimized for:
-- stylus workflows
-- resting palm interaction
-- adaptive arm/palm tracking
-- universal capacitive touchscreens
+`WM_NCHITTEST` now returns `HTCLIENT` so the overlay receives `WM_POINTER*` events reliably while remaining visually transparent via `BackColor`/`TransparencyKey`.
+
+## Calibration (Onboarding / Recalibration)
+
+On first run (or when choosing **Recalibrate** from tray menu), the app enters onboarding mode and captures palm-size samples to estimate initial palm-reject surface thresholds.
+
+## Blob Settings
+
+These are saved in settings:
+
+- `PalmPadding` (default `40`)
+- `OuterRingSize` (default `60`)
+- `BlobDecayRate` (default `0.08`)
+- `BlobDecayIntervalMs` (default `150`)

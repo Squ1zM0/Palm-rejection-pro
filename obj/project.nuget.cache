@@ -1,0 +1,10 @@
+{
+  "version": 2,
+  "dgSpecHash": "2C24C3/BI2Y=",
+  "success": true,
+  "projectFilePath": "/tmp/workspace/Squ1zM0/Palm-rejection-pro/PalmRejectorPro.csproj",
+  "expectedPackageFiles": [
+    "/home/runner/.nuget/packages/microsoft.windowsdesktop.app.ref/8.0.27/microsoft.windowsdesktop.app.ref.8.0.27.nupkg.sha512"
+  ],
+  "logs": []
+}
